@@ -41,7 +41,7 @@ jobs:
           python -m PyInstaller --noconfirm --clean --onefile --windowed `
             --name "MasterRender_PRO_ADIAN" `
             --add-binary "ffmpeg.exe;." `
-            app\masterrender_adian.py
+           masterrender_adian.py
 
       - name: Verify EXE
         shell: powershell
