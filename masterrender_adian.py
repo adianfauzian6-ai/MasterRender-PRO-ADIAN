@@ -8,398 +8,320 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 
-APP_NAME = "MasterRender PRO by Scratchones (ADIAN)"
+APP_NAME = "MasterRender PRO by AfroxSTD (ADIAN)"
+MAX_VIDEOS = 60
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
 
-class App(tk.Tk):
+
+def find_ffmpeg():
+    candidates = []
+    if getattr(sys, "frozen", False):
+        meipass = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        candidates += [meipass / "ffmpeg.exe", Path(sys.executable).resolve().parent / "ffmpeg.exe"]
+    else:
+        here = Path(__file__).resolve().parent
+        candidates += [here / "ffmpeg.exe", here.parent / "bin" / "ffmpeg.exe"]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which("ffmpeg") or ""
+
+
+class MasterRender(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("1500x900")
+        self.geometry("1400x850")
         self.minsize(1100, 700)
+        self.configure(bg="#0b0d17")
 
-        self.bg = "#172033"
-        self.panel = "#202b42"
-        self.panel2 = "#263550"
-        self.input_bg = "#f3f6fb"
-        self.text = "#eaf0f8"
-        self.accent = "#4f8cff"
-        self.accent2 = "#65c7ff"
-        self.danger = "#e85b6f"
-        self.border = "#405171"
+        self.videos = []
+        self.audio_files = []
+        self.stop_flag = threading.Event()
+        self.render_thread = None
+        self.ffmpeg = find_ffmpeg()
 
-        self.configure(bg=self.bg)
-        self.video_path = tk.StringVar()
-        self.audio_folder = tk.StringVar()
-        self.output_folder = tk.StringVar()
-        self.output_name = tk.StringVar(value="hasil_render")
-        self.transition = tk.StringVar(value="Fade")
-        self.quality = tk.StringVar(value="Mengikuti Master")
-        self.variations = tk.IntVar(value=1)
-        self.loop_count = tk.IntVar(value=1)
-        self.random_audio = tk.BooleanVar(value=False)
-        self.create_txt = tk.BooleanVar(value=True)
-        self.random_volume = tk.BooleanVar(value=False)
-        self.use_all_audio = tk.BooleanVar(value=True)
-        self.stop_flag = False
-
-        self.style_ui()
-        self.build()
-
-        self.log("[READY] Aplikasi siap digunakan.")
-        ff = self.ffmpeg_path()
-        if ff:
-            self.log(f"[INFO] FFmpeg terdeteksi: {ff}")
+        self._setup_style()
+        self._build_ui()
+        self.log("READY", "Aplikasi siap digunakan.")
+        if self.ffmpeg:
+            self.log("INFO", f"FFmpeg terdeteksi: {self.ffmpeg}")
         else:
-            self.log("[WARN] FFmpeg internal tidak ditemukan.")
+            self.log("WARN", "FFmpeg belum ditemukan. Letakkan ffmpeg.exe di folder aplikasi.")
 
-    def style_ui(self):
-        s = ttk.Style(self)
-        s.theme_use("clam")
-        s.configure(".", font=("Segoe UI", 10))
-        s.configure("TNotebook", background=self.panel, borderwidth=0)
-        s.configure("TNotebook.Tab", padding=(28, 10), background="#dce9f7",
-                    foreground="#16375e", font=("Segoe UI", 10, "bold"))
-        s.map("TNotebook.Tab", background=[("selected", "#ffffff")])
-        s.configure("TButton", padding=(12, 8), background="#e8f2fb",
-                    foreground="#17395f", font=("Segoe UI", 10, "bold"))
-        s.map("TButton", background=[("active", "#ffffff")])
-        s.configure("Accent.TButton", background=self.accent, foreground="white")
-        s.map("Accent.TButton", background=[("active", "#6a9dff")])
-        s.configure("Danger.TButton", background=self.danger, foreground="white")
-        s.map("Danger.TButton", background=[("active", "#f07787")])
-        s.configure("TCheckbutton", background=self.panel2, foreground=self.text)
-        s.configure("TLabelframe", background=self.panel2, foreground=self.text)
-        s.configure("TLabelframe.Label", background=self.panel2, foreground=self.text,
-                    font=("Segoe UI", 10, "bold"))
-        s.configure("TLabel", background=self.panel2, foreground=self.text)
+    def _setup_style(self):
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure(".", background="#111426", foreground="#e8eaff", fieldbackground="#171a2d")
+        style.configure("TNotebook", background="#0b0d17", borderwidth=0)
+        style.configure("TNotebook.Tab", background="#15182a", foreground="#aeb4d8", padding=(22, 10), font=("Segoe UI", 10, "bold"))
+        style.map("TNotebook.Tab", background=[("selected", "#24204b")], foreground=[("selected", "#c9bfff")])
+        style.configure("TButton", background="#171a2d", foreground="#dfe2f5", padding=(11, 8), font=("Segoe UI", 9, "bold"))
+        style.map("TButton", background=[("active", "#282d4a")])
+        style.configure("TCheckbutton", background="#111426", foreground="#cfd2ee")
+        style.configure("TProgressbar", troughcolor="#15182a", background="#8b6cff", borderwidth=0)
 
-    def build(self):
-        top = tk.Frame(self, bg=self.accent, height=46)
-        top.pack(fill="x")
-        tk.Label(top, text=APP_NAME, bg=self.accent, fg="white",
-                 font=("Segoe UI", 13, "bold")).pack(side="left", padx=18, pady=10)
+    def _label(self, parent, text, size=10, bold=False):
+        return tk.Label(parent, text=text, bg=parent.cget("bg"), fg="#eef0ff", font=("Segoe UI", size, "bold" if bold else "normal"))
 
-        body = tk.Frame(self, bg=self.bg)
-        body.pack(fill="both", expand=True, padx=10, pady=10)
+    def _card(self, parent):
+        return tk.Frame(parent, bg="#111426", highlightbackground="#252943", highlightthickness=1, bd=0)
 
-        left = tk.Frame(body, bg=self.panel, highlightbackground=self.border, highlightthickness=1)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 7))
-        right = tk.Frame(body, bg=self.panel, width=300, highlightbackground=self.border, highlightthickness=1)
-        right.pack(side="right", fill="y", padx=(7, 0))
-        right.pack_propagate(False)
+    def _build_ui(self):
+        top = tk.Frame(self, bg="#0b0d17", height=72)
+        top.pack(fill="x", padx=22, pady=(18, 8))
+        tk.Label(top, text="MASTERRENDER PRO", bg="#0b0d17", fg="#f2f0ff", font=("Segoe UI", 22, "bold")).pack(side="left")
+        tk.Label(top, text="  by AfroxSTD  •  ADIAN", bg="#0b0d17", fg="#9e8cff", font=("Segoe UI", 11, "bold")).pack(side="left", pady=(8, 0))
+        self.status_badge = tk.Label(top, text="● READY", bg="#171a2d", fg="#9b8cff", font=("Segoe UI", 9, "bold"), padx=14, pady=7)
+        self.status_badge.pack(side="right")
 
-        self.log_frame(right)
+        body = tk.Frame(self, bg="#0b0d17")
+        body.pack(fill="both", expand=True, padx=22, pady=8)
 
-        self.nb = ttk.Notebook(left)
-        self.nb.pack(fill="both", expand=True, padx=10, pady=10)
+        side = tk.Frame(body, bg="#101323", width=210)
+        side.pack(side="left", fill="y", padx=(0, 14))
+        side.pack_propagate(False)
+        tk.Label(side, text="WORKSPACE", bg="#101323", fg="#777eaa", font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=18, pady=(20, 12))
+        for txt in ["Dashboard", "Input Media", "Render & Variasi", "Live Streaming", "Settings"]:
+            active = txt == "Render & Variasi"
+            tk.Label(side, text=("◆  " if active else "   ") + txt, bg="#24204b" if active else "#101323", fg="#c9bfff" if active else "#9298bd", anchor="w", padx=16, pady=11, font=("Segoe UI", 10, "bold" if active else "normal")).pack(fill="x", padx=9, pady=2)
 
-        self.input_tab = tk.Frame(self.nb, bg=self.panel2)
-        self.render_tab = tk.Frame(self.nb, bg=self.panel2)
-        self.stream_tab = tk.Frame(self.nb, bg=self.panel2)
-        self.nb.add(self.input_tab, text="Input")
-        self.nb.add(self.render_tab, text="Render & Variasi")
-        self.nb.add(self.stream_tab, text="Live Streaming")
+        main = tk.Frame(body, bg="#0b0d17")
+        main.pack(side="left", fill="both", expand=True)
+        self.notebook = ttk.Notebook(main)
+        self.notebook.pack(fill="both", expand=True)
 
-        self.build_input()
-        self.build_render()
-        self.build_stream()
+        self.input_tab = tk.Frame(self.notebook, bg="#0b0d17")
+        self.render_tab = tk.Frame(self.notebook, bg="#0b0d17")
+        self.live_tab = tk.Frame(self.notebook, bg="#0b0d17")
+        self.notebook.add(self.input_tab, text="  Input  ")
+        self.notebook.add(self.render_tab, text="  Render & Variasi  ")
+        self.notebook.add(self.live_tab, text="  Live Streaming  ")
 
-        bottom = tk.Frame(left, bg=self.panel)
-        bottom.pack(fill="x", padx=10, pady=(0, 10))
-        self.start_btn = ttk.Button(bottom, text="START RENDER", style="Accent.TButton",
-                                    command=self.start_render)
-        self.start_btn.grid(row=0, column=0, sticky="ew", padx=(0,5))
-        ttk.Button(bottom, text="STOP", style="Danger.TButton",
-                   command=self.stop_render).grid(row=0, column=1, sticky="ew", padx=5)
-        ttk.Button(bottom, text="OPEN OUTPUT", command=self.open_output).grid(row=0, column=2, sticky="ew", padx=(5,0))
-        bottom.columnconfigure(0, weight=1); bottom.columnconfigure(1, weight=1); bottom.columnconfigure(2, weight=1)
+        self._build_input()
+        self._build_render()
+        self._build_live()
 
-        self.progress = ttk.Progressbar(left, mode="determinate", maximum=100)
-        self.progress.pack(fill="x", padx=10)
-        self.status = tk.Label(left, text="Siap digunakan.", bg=self.panel, fg="#c9d7e8",
-                               anchor="w", font=("Segoe UI", 9))
-        self.status.pack(fill="x", padx=10, pady=(5, 10))
+        bottom = tk.Frame(self, bg="#0b0d17")
+        bottom.pack(fill="x", padx=22, pady=(4, 18))
+        self.progress = ttk.Progressbar(bottom, mode="determinate", maximum=100)
+        self.progress.pack(fill="x", pady=(0, 8))
+        self.progress_text = tk.Label(bottom, text="Siap merender hingga 60 video", bg="#0b0d17", fg="#858caf", font=("Segoe UI", 9))
+        self.progress_text.pack(side="left")
 
-    def log_frame(self, parent):
-        tk.Label(parent, text="Log", bg=self.panel, fg=self.text,
-                 font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=12, pady=(12,5))
-        self.log_box = tk.Text(parent, bg="#111827", fg="#bfe2ff", insertbackground="white",
-                               font=("Consolas", 9), relief="flat", wrap="none")
-        self.log_box.pack(fill="both", expand=True, padx=8, pady=4)
-        ttk.Button(parent, text="Bersihkan", command=lambda: self.log_box.delete("1.0","end")).pack(
-            fill="x", padx=8, pady=(4,8))
+        btns = tk.Frame(bottom, bg="#0b0d17")
+        btns.pack(side="right")
+        ttk.Button(btns, text="OPEN OUTPUT", command=self.open_output).pack(side="left", padx=4)
+        ttk.Button(btns, text="BERSIHKAN LOG", command=self.clear_log).pack(side="left", padx=4)
+        self.stop_btn = ttk.Button(btns, text="STOP", command=self.stop_render)
+        self.stop_btn.pack(side="left", padx=4)
+        tk.Button(btns, text="START RENDER", command=self.start_render, bg="#7d5cff", fg="white", activebackground="#9a7fff", activeforeground="white", relief="flat", bd=0, font=("Segoe UI", 10, "bold"), padx=24, pady=11).pack(side="left", padx=(8, 0))
 
-    def log(self, msg):
+    def _build_input(self):
+        tab = self.input_tab
+        left = self._card(tab); left.pack(side="left", fill="both", expand=True, padx=(0, 8), pady=12)
+        right = self._card(tab); right.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=12)
+
+        self._label(left, "VIDEO INPUT", 11, True).pack(anchor="w", padx=18, pady=(18, 5))
+        tk.Label(left, text="Tambahkan maksimal 60 video untuk batch rendering.", bg="#111426", fg="#858caf", font=("Segoe UI", 9)).pack(anchor="w", padx=18)
+        row = tk.Frame(left, bg="#111426"); row.pack(fill="x", padx=18, pady=14)
+        ttk.Button(row, text="+ TAMBAH VIDEO", command=self.add_videos).pack(side="left")
+        ttk.Button(row, text="HAPUS SEMUA", command=self.clear_videos).pack(side="left", padx=8)
+        self.video_count = tk.Label(row, text="0 / 60", bg="#111426", fg="#b8aaff", font=("Segoe UI", 10, "bold")); self.video_count.pack(side="right")
+        self.video_list = tk.Listbox(left, bg="#0d1020", fg="#cfd2ee", selectbackground="#30285e", selectforeground="white", relief="flat", bd=0, font=("Segoe UI", 9))
+        self.video_list.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+
+        self._label(right, "AUDIO TRACKS", 11, True).pack(anchor="w", padx=18, pady=(18, 5))
+        tk.Label(right, text="Audio dapat dipakai untuk setiap video secara berurutan atau acak.", bg="#111426", fg="#858caf", font=("Segoe UI", 9)).pack(anchor="w", padx=18)
+        row2 = tk.Frame(right, bg="#111426"); row2.pack(fill="x", padx=18, pady=14)
+        ttk.Button(row2, text="+ TAMBAH AUDIO", command=self.add_audio).pack(side="left")
+        ttk.Button(row2, text="HAPUS SEMUA", command=self.clear_audio).pack(side="left", padx=8)
+        self.audio_count_label = tk.Label(row2, text="0 lagu", bg="#111426", fg="#b8aaff", font=("Segoe UI", 10, "bold")); self.audio_count_label.pack(side="right")
+        self.audio_list = tk.Listbox(right, bg="#0d1020", fg="#cfd2ee", selectbackground="#30285e", selectforeground="white", relief="flat", bd=0, font=("Segoe UI", 9))
+        self.audio_list.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+
+    def _build_render(self):
+        tab = self.render_tab
+        settings = self._card(tab); settings.pack(side="left", fill="both", expand=True, padx=(0, 8), pady=12)
+        logcard = self._card(tab); logcard.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=12)
+        self._label(settings, "RENDER SETTINGS", 11, True).pack(anchor="w", padx=18, pady=(18, 15))
+        grid = tk.Frame(settings, bg="#111426"); grid.pack(fill="x", padx=18)
+        self.quality = tk.StringVar(value="Mengikuti Master")
+        self.transition = tk.StringVar(value="Fade")
+        self.output_dir = tk.StringVar(value=str(Path.cwd() / "output"))
+        self.loop_count = tk.IntVar(value=1)
+        self.variation_count = tk.IntVar(value=1)
+        self.random_audio = tk.BooleanVar(value=True)
+        self.normalize = tk.BooleanVar(value=False)
+        self.make_txt = tk.BooleanVar(value=False)
+        self._row(grid, 0, "Transition", ttk.Combobox(grid, textvariable=self.transition, values=["Fade", "Cut", "None"], state="readonly", width=25))
+        self._row(grid, 1, "Quality", ttk.Combobox(grid, textvariable=self.quality, values=["Mengikuti Master", "Cepat", "Kualitas Tinggi"], state="readonly", width=25))
+        self._row(grid, 2, "Variasi per video", ttk.Spinbox(grid, from_=1, to=100, textvariable=self.variation_count, width=27))
+        self._row(grid, 3, "Loop video", ttk.Spinbox(grid, from_=1, to=100, textvariable=self.loop_count, width=27))
+        self._label(settings, "BATCH", 10, True).pack(anchor="w", padx=18, pady=(22, 8))
+        checks = tk.Frame(settings, bg="#111426"); checks.pack(fill="x", padx=18)
+        ttk.Checkbutton(checks, text="Acak urutan lagu", variable=self.random_audio).pack(anchor="w", pady=4)
+        ttk.Checkbutton(checks, text="Ratakkan volume lagu", variable=self.normalize).pack(anchor="w", pady=4)
+        ttk.Checkbutton(checks, text="Buat file .txt", variable=self.make_txt).pack(anchor="w", pady=4)
+        self._label(settings, "OUTPUT FOLDER", 10, True).pack(anchor="w", padx=18, pady=(22, 8))
+        outrow = tk.Frame(settings, bg="#111426"); outrow.pack(fill="x", padx=18)
+        tk.Entry(outrow, textvariable=self.output_dir, bg="#0d1020", fg="#cfd2ee", insertbackground="white", relief="flat", font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True, ipady=8)
+        ttk.Button(outrow, text="...", command=self.choose_output).pack(side="left", padx=(7, 0))
+        self._label(logcard, "RENDER LOG", 11, True).pack(anchor="w", padx=18, pady=(18, 10))
+        self.logbox = tk.Text(logcard, bg="#0a0d18", fg="#bfc5e8", insertbackground="white", relief="flat", bd=0, font=("Consolas", 9), wrap="word")
+        self.logbox.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+        for tag, color in [("READY", "#9b8cff"), ("INFO", "#8fa8ff"), ("RENDER", "#d4b3ff"), ("ERROR", "#ff7d96"), ("WARN", "#ffca7a"), ("FFMPEG", "#8ee6d4")]: self.logbox.tag_config(tag, foreground=color)
+
+    def _row(self, parent, r, label, widget):
+        tk.Label(parent, text=label, bg="#111426", fg="#858caf", font=("Segoe UI", 9)).grid(row=r, column=0, sticky="w", pady=6)
+        widget.grid(row=r, column=1, sticky="e", padx=(35, 0), pady=6)
+        parent.grid_columnconfigure(1, weight=1)
+
+    def _build_live(self):
+        frame = self._card(self.live_tab); frame.pack(fill="both", expand=True, padx=12, pady=12)
+        self._label(frame, "LIVE STREAMING", 14, True).pack(anchor="w", padx=22, pady=(22, 8))
+        tk.Label(frame, text="Panel streaming disiapkan untuk integrasi RTMP pada versi berikutnya.", bg="#111426", fg="#858caf", font=("Segoe UI", 10)).pack(anchor="w", padx=22)
+
+    def add_videos(self):
+        files = filedialog.askopenfilenames(title="Pilih video", filetypes=[("Video", "*.mp4 *.mov *.mkv *.avi *.webm"), ("Semua file", "*.*")])
+        if not files: return
+        remaining = MAX_VIDEOS - len(self.videos)
+        if remaining <= 0:
+            messagebox.showwarning("Batas 60 video", "Maksimal 60 video sudah tercapai."); return
+        if len(files) > remaining:
+            messagebox.showwarning("Batas 60 video", f"Hanya {remaining} video yang dapat ditambahkan.")
+            files = files[:remaining]
+        self.videos.extend(files); self._refresh_video_list()
+
+    def _refresh_video_list(self):
+        self.video_list.delete(0, "end")
+        for i, f in enumerate(self.videos, 1): self.video_list.insert("end", f"{i:02d}. {Path(f).name}")
+        self.video_count.config(text=f"{len(self.videos)} / {MAX_VIDEOS}")
+
+    def clear_videos(self):
+        self.videos.clear(); self._refresh_video_list()
+
+    def add_audio(self):
+        files = filedialog.askopenfilenames(title="Pilih audio", filetypes=[("Audio", "*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.opus"), ("Semua file", "*.*")])
+        if not files: return
+        self.audio_files.extend(files)
+        self.audio_list.delete(0, "end")
+        for i, f in enumerate(self.audio_files, 1): self.audio_list.insert("end", f"{i:02d}. {Path(f).name}")
+        self.audio_count_label.config(text=f"{len(self.audio_files)} lagu")
+
+    def clear_audio(self):
+        self.audio_files.clear(); self.audio_list.delete(0, "end"); self.audio_count_label.config(text="0 lagu")
+
+    def choose_output(self):
+        d = filedialog.askdirectory(title="Pilih folder output")
+        if d: self.output_dir.set(d)
+
+    def log(self, tag, text):
         def write():
-            self.log_box.insert("end", msg + "\n")
-            self.log_box.see("end")
+            self.logbox.insert("end", f"[{tag}] {text}\n", tag if tag in self.logbox.tag_names() else "")
+            self.logbox.see("end")
         self.after(0, write)
 
-    def labeled_entry(self, parent, row, label, variable, buttons=None):
-        tk.Label(parent, text=label, bg=self.panel2, fg=self.text).grid(row=row, column=0, sticky="w", padx=10, pady=8)
-        e = tk.Entry(parent, textvariable=variable, bg=self.input_bg, fg="#18324d",
-                     relief="flat", font=("Segoe UI", 10))
-        e.grid(row=row, column=1, sticky="ew", padx=8, pady=8, ipady=4)
-        if buttons:
-            for i, (txt, cmd) in enumerate(buttons):
-                ttk.Button(parent, text=txt, command=cmd).grid(row=row, column=2+i, padx=4, pady=6)
-        return e
+    def clear_log(self): self.logbox.delete("1.0", "end")
 
-    def build_input(self):
-        p = self.input_tab
-        p.columnconfigure(1, weight=1)
-        self.labeled_entry(p, 0, "Video Master", self.video_path, [("Pilih", self.pick_video), ("Hapus", lambda: self.video_path.set(""))])
-        self.labeled_entry(p, 1, "Folder Lagu", self.audio_folder, [("Pilih", self.pick_audio_folder), ("Hapus", lambda: self.audio_folder.set(""))])
-        self.labeled_entry(p, 2, "Folder Output", self.output_folder, [("Pilih", self.pick_output_folder), ("Hapus", lambda: self.output_folder.set(""))])
-        self.labeled_entry(p, 3, "Nama Output", self.output_name, [("Scan", self.scan_audio), ("Hapus Input", self.clear_input)])
-
-        tk.Label(p, text="Daftar ini adalah lagu yang masuk album. Pilih lagu lalu hapus jika tidak ingin dipakai.",
-                 bg=self.panel2, fg="#d7e4f2", anchor="w").grid(row=4, column=0, columnspan=4, sticky="ew", padx=10, pady=(8,3))
-
-        btnrow = tk.Frame(p, bg=self.panel2)
-        btnrow.grid(row=5, column=0, columnspan=4, sticky="ew", padx=10)
-        for i in range(3): btnrow.columnconfigure(i, weight=1)
-        ttk.Button(btnrow, text="Hapus Lagu Terpilih", command=self.remove_selected).grid(row=0,column=0,sticky="ew",padx=4,pady=5)
-        ttk.Button(btnrow, text="Pilih Semua", command=self.select_all).grid(row=0,column=1,sticky="ew",padx=4,pady=5)
-        ttk.Button(btnrow, text="Scan Ulang", command=self.scan_audio).grid(row=0,column=2,sticky="ew",padx=4,pady=5)
-
-        lf = ttk.LabelFrame(p, text="Daftar Lagu Album")
-        lf.grid(row=6, column=0, columnspan=4, sticky="nsew", padx=10, pady=6)
-        p.rowconfigure(6, weight=1)
-        self.audio_list = tk.Listbox(lf, selectmode="extended", bg=self.input_bg, fg="#18324d",
-                                     font=("Segoe UI", 10), relief="flat")
-        sb = ttk.Scrollbar(lf, command=self.audio_list.yview)
-        self.audio_list.configure(yscrollcommand=sb.set)
-        self.audio_list.pack(side="left", fill="both", expand=True, padx=5, pady=5)
-        sb.pack(side="right", fill="y", pady=5)
-
-    def build_render(self):
-        p = self.render_tab
-        p.columnconfigure(1, weight=1)
-        box = ttk.LabelFrame(p, text="Mode Render & Variasi")
-        box.pack(fill="x", padx=10, pady=10)
-        box.columnconfigure(1, weight=1)
-
-        self.combo(box, 0, "Transisi Loop", self.transition, ["Fade", "Hard Cut"])
-        self.combo(box, 1, "Kualitas", self.quality, ["Mengikuti Master", "Cepat", "Kualitas Tinggi"])
-
-        opts = tk.Frame(box, bg=self.panel2)
-        opts.grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=8)
-        ttk.Checkbutton(opts, text="Acak urutan lagu", variable=self.random_audio).grid(row=0,column=0,sticky="w",padx=(0,20))
-        ttk.Checkbutton(opts, text="Ratakkan volume lagu", variable=self.random_volume).grid(row=0,column=1,sticky="w")
-        ttk.Checkbutton(opts, text="Buat .txt", variable=self.create_txt).grid(row=1,column=0,sticky="w",padx=(0,20))
-        ttk.Checkbutton(opts, text="Buat beberapa variasi", variable=self.use_all_audio).grid(row=1,column=1,sticky="w")
-
-        self.spin(box, 3, "Jumlah variasi", self.variations, 1, 100)
-        self.spin(box, 4, "Loop video", self.loop_count, 1, 9999)
-        self.spin(box, 5, "Total lagu yang dipakai", self.use_all_audio, 1, 9999, boolvar=True)
-
-        tk.Label(p, text="Contoh: video 20 detik + lagu 3 menit → video di-loop sampai durasi lagu, lalu audio dipasang.",
-                 bg=self.panel2, fg="#d7e4f2", anchor="w").pack(fill="x", padx=10, pady=4)
-        tk.Label(p, text="Rekomendasi: Fade + Mengikuti Master untuk hasil aman dan cepat.",
-                 bg=self.panel2, fg="#9fc9ef", anchor="w").pack(fill="x", padx=10)
-
-    def combo(self, parent, row, label, variable, values):
-        tk.Label(parent, text=label, bg=self.panel2, fg=self.text).grid(row=row,column=0,sticky="w",padx=10,pady=7)
-        ttk.Combobox(parent, textvariable=variable, values=values, state="readonly", width=25).grid(row=row,column=1,sticky="w",padx=8,pady=7)
-
-    def spin(self, parent, row, label, variable, mn, mx, boolvar=False):
-        tk.Label(parent, text=label, bg=self.panel2, fg=self.text).grid(row=row,column=0,sticky="w",padx=10,pady=7)
-        if boolvar:
-            # Keep a numeric value separate because a Checkbutton is not suitable here.
-            if not hasattr(self, "audio_count"):
-                self.audio_count = tk.IntVar(value=1)
-            var = self.audio_count
-        else:
-            var = variable
-        tk.Spinbox(parent, from_=mn, to=mx, textvariable=var, width=10, bg=self.input_bg,
-                   fg="#18324d", relief="flat").grid(row=row,column=1,sticky="w",padx=8,pady=7)
-
-    def build_stream(self):
-        p = self.stream_tab
-        tk.Label(p, text="Live Streaming", bg=self.panel2, fg=self.text,
-                 font=("Segoe UI", 16, "bold")).pack(pady=(60,10))
-        tk.Label(p, text="Panel streaming siap dikembangkan untuk RTMP/YouTube/TikTok.\n"
-                         "Versi ini fokus pada looping video + penambahan lagu + export MP4.",
-                 bg=self.panel2, fg="#d7e4f2", justify="center").pack()
-
-    def ffmpeg_path(self):
-        # In the final EXE, ffmpeg.exe is unpacked by PyInstaller to a
-        # temporary _MEIPASS folder. Fall back to the executable folder.
-        candidates = []
-        if getattr(sys, "frozen", False):
-            meipass = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
-            candidates.append(meipass / "ffmpeg.exe")
-            candidates.append(Path(sys.executable).resolve().parent / "ffmpeg.exe")
-        else:
-            candidates.append(Path(__file__).resolve().parent / "ffmpeg.exe")
-            candidates.append(Path(__file__).resolve().parent.parent / "bin" / "ffmpeg.exe")
-        for p in candidates:
-            if p.is_file():
-                return str(p)
-        return shutil.which("ffmpeg")
-
-    def pick_video(self):
-        f = filedialog.askopenfilename(filetypes=[("Video", "*.mp4 *.mov *.mkv *.avi *.webm"), ("Semua file", "*.*")])
-        if f:
-            self.video_path.set(f); self.log(f"[INFO] Video: {f}")
-
-    def pick_audio_folder(self):
-        d = filedialog.askdirectory()
-        if d:
-            self.audio_folder.set(d); self.scan_audio()
-
-    def pick_output_folder(self):
-        d = filedialog.askdirectory()
-        if d:
-            self.output_folder.set(d)
-
-    def clear_input(self):
-        self.video_path.set(""); self.audio_folder.set(""); self.audio_list.delete(0,"end")
-
-    def scan_audio(self):
-        self.audio_list.delete(0, "end")
-        folder = self.audio_folder.get().strip()
-        if not folder or not os.path.isdir(folder):
-            self.log("[WARN] Folder lagu belum dipilih.")
-            return
-        files = sorted([str(x) for x in Path(folder).iterdir() if x.is_file() and x.suffix.lower() in AUDIO_EXTS])
-        for f in files:
-            self.audio_list.insert("end", f)
-        self.log(f"[INFO] {len(files)} lagu ditemukan.")
-        if files:
-            self.audio_list.selection_set(0, "end")
-
-    def remove_selected(self):
-        sel = list(self.audio_list.curselection())[::-1]
-        for i in sel: self.audio_list.delete(i)
-
-    def select_all(self):
-        self.audio_list.selection_set(0, "end")
-
-    def stop_render(self):
-        self.stop_flag = True
-        self.log("[INFO] Stop diminta. Proses FFmpeg akan dihentikan pada langkah aman berikutnya.")
-        self.status.config(text="Menghentikan...")
+    def set_status(self, text, color="#9b8cff"):
+        self.after(0, lambda: self.status_badge.config(text="● " + text, fg=color))
 
     def open_output(self):
-        folder = self.output_folder.get().strip()
-        if not folder:
-            folder = str(Path.cwd())
-        os.makedirs(folder, exist_ok=True)
-        try:
-            os.startfile(folder)
-        except Exception:
-            subprocess.Popen(["xdg-open", folder])
+        d = Path(self.output_dir.get()); d.mkdir(parents=True, exist_ok=True)
+        try: os.startfile(str(d))
+        except Exception: subprocess.Popen(["explorer", str(d)])
+
+    def stop_render(self):
+        self.stop_flag.set(); self.log("WARN", "Permintaan STOP diterima. Proses FFmpeg aktif akan dihentikan."); self.set_status("STOPPING", "#ffca7a")
 
     def start_render(self):
-        if not self.ffmpeg_path():
-            messagebox.showerror("FFmpeg internal tidak ditemukan",
-                                 "Build aplikasi tidak lengkap. Silakan build ulang.")
-            return
-        video = self.video_path.get().strip()
-        if not video or not os.path.isfile(video):
-            messagebox.showwarning("Input belum lengkap", "Pilih Video Master terlebih dahulu.")
-            return
-        audios = [self.audio_list.get(i) for i in self.audio_list.curselection()]
-        if not audios:
-            audios = [self.audio_list.get(i) for i in range(self.audio_list.size())]
-        if not audios:
-            messagebox.showwarning("Lagu belum ada", "Pilih folder lagu lalu Scan.")
-            return
-        out = self.output_folder.get().strip() or str(Path(video).parent / "output")
-        os.makedirs(out, exist_ok=True)
+        if self.render_thread and self.render_thread.is_alive(): messagebox.showinfo("Render berjalan", "Render sedang berjalan."); return
+        if not self.ffmpeg: messagebox.showerror("FFmpeg tidak ditemukan", "Letakkan ffmpeg.exe di folder aplikasi, lalu jalankan kembali."); return
+        if not self.videos: messagebox.showwarning("Video belum dipilih", "Tambahkan minimal 1 video."); return
+        if not self.audio_files: messagebox.showwarning("Audio belum dipilih", "Tambahkan minimal 1 audio."); return
         try:
-            variations = max(1, int(self.variations.get()))
-            loops = max(1, int(self.loop_count.get()))
-            count = max(1, int(self.audio_count.get()))
+            variations = max(1, min(100, int(self.variation_count.get())))
+            loops = max(1, min(100, int(self.loop_count.get())))
         except Exception:
-            messagebox.showerror("Pengaturan salah", "Jumlah variasi/loop/lagu harus berupa angka.")
-            return
-        self.stop_flag = False
-        self.start_btn.config(state="disabled")
-        threading.Thread(target=self.render_worker,
-                         args=(video, audios, out, variations, loops, count), daemon=True).start()
+            messagebox.showerror("Pengaturan salah", "Variasi dan loop harus berupa angka."); return
+        out = Path(self.output_dir.get()).expanduser(); out.mkdir(parents=True, exist_ok=True)
+        self.stop_flag.clear(); self.progress["value"] = 0
+        self.render_thread = threading.Thread(target=self.render_worker, args=(variations, loops, out), daemon=True)
+        self.render_thread.start()
 
-    def render_worker(self, video, audios, out, variations, loops, count):
-        try:
-            pool = audios[:]
-            if self.random_audio.get():
-                random.shuffle(pool)
-            pool = pool[:count] if count < len(pool) else pool
+    def render_worker(self, variations, loops, out):
+        total = len(self.videos) * variations
+        done = 0
+        self.set_status("RENDERING", "#9b8cff")
+        self.log("INFO", f"Mulai batch render: {len(self.videos)} video × {variations} variasi = {total} output.")
+        for video_index, video in enumerate(self.videos, 1):
+            if self.stop_flag.is_set(): break
+            pool = list(self.audio_files)
+            if self.random_audio.get(): random.shuffle(pool)
+            for var in range(1, variations + 1):
+                if self.stop_flag.is_set(): break
+                audio = pool[(var - 1) % len(pool)]
+                stem, astem = Path(video).stem, Path(audio).stem
+                outfile = out / f"{stem}_V{var:02d}_{astem}.mp4"
+                if outfile.exists():
+                    n, base = 2, outfile
+                    while outfile.exists(): outfile = base.with_name(f"{base.stem}_{n}{base.suffix}"); n += 1
+                self.log("RENDER", f"Video {video_index}/{len(self.videos)} • variasi {var}/{variations}: {Path(video).name}")
+                ok = self.render_one(video, audio, str(outfile), loops)
+                done += 1
+                self.after(0, lambda d=done, t=total, vi=video_index: self._progress(d, t, vi, len(self.videos)))
+                if ok:
+                    self.log("INFO", f"SELESAI: {outfile.name}")
+                    if self.make_txt.get():
+                        try: outfile.with_suffix(".txt").write_text(f"Video: {video}\nAudio: {audio}\nVariasi: {var}\n", encoding="utf-8")
+                        except Exception as e: self.log("WARN", f"Gagal membuat TXT: {e}")
+                else: self.log("ERROR", f"Render gagal: {Path(video).name} + {Path(audio).name}")
+        if self.stop_flag.is_set():
+            self.set_status("STOPPED", "#ffca7a"); self.log("WARN", f"Batch dihentikan. {done}/{total} tugas selesai.")
+        else:
+            self.set_status("READY", "#9b8cff"); self.log("READY", f"Batch selesai. {done}/{total} tugas diproses."); self.after(0, lambda: self.progress_text.config(text=f"Selesai • {done}/{total} output"))
 
-            total = max(1, variations * len(pool))
-            done = 0
-            self.log(f"[INFO] Mulai render: {variations} variasi x {len(pool)} lagu.")
-            for v in range(1, variations + 1):
-                if self.stop_flag: break
-                current = pool[:]
-                if self.random_audio.get(): random.shuffle(current)
-                for idx, audio in enumerate(current, 1):
-                    if self.stop_flag: break
-                    stem = f"{self.output_name.get().strip() or 'hasil_render'}_v{v:02d}_{idx:02d}"
-                    outfile = os.path.join(out, stem + ".mp4")
-                    self.log(f"[RENDER] {Path(audio).name} -> {outfile}")
-                    ok = self.render_one(video, audio, outfile, loops)
-                    done += 1
-                    self.after(0, lambda p=done/total*100: self.progress.config(value=p))
-                    if ok:
-                        self.log("[OK] Render selesai.")
-                        if self.create_txt.get():
-                            try:
-                                with open(os.path.splitext(outfile)[0] + ".txt", "w", encoding="utf-8") as f:
-                                    f.write(f"Video: {video}\nAudio: {audio}\n")
-                            except Exception as e:
-                                self.log(f"[WARN] TXT gagal: {e}")
-                    else:
-                        self.log("[ERROR] Render gagal.")
-            self.after(0, lambda: self.status.config(text="Dihentikan." if self.stop_flag else "Render selesai."))
-        finally:
-            self.after(0, lambda: self.start_btn.config(state="normal"))
+    def _progress(self, done, total, vi, maxv):
+        pct = done / total * 100 if total else 0
+        self.progress["value"] = pct; self.progress_text.config(text=f"Video {vi}/{maxv} • {done}/{total} output • {pct:.0f}%")
 
     def render_one(self, video, audio, outfile, loops):
-        # Loop video indefinitely, then stop when audio ends. Short input videos repeat seamlessly.
-        vf = f"scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"
-        if self.quality.get() == "Cepat":
-            vcodec = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
-        elif self.quality.get() == "Kualitas Tinggi":
-            vcodec = ["-c:v", "libx264", "-preset", "slow", "-crf", "18"]
-        else:
-            vcodec = ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
-
-        cmd = [
-            self.ffmpeg_path(), "-y",
-            "-stream_loop", "-1", "-i", video,
-            "-i", audio,
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-vf", vf,
-            *vcodec,
-            "-c:a", "aac", "-b:a", "192k",
-            "-shortest",
-            "-movflags", "+faststart",
-            outfile
-        ]
+        if not Path(video).exists(): self.log("ERROR", f"Video tidak ditemukan: {video}"); return False
+        if not Path(audio).exists(): self.log("ERROR", f"Audio tidak ditemukan: {audio}"); return False
+        vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"
+        q = self.quality.get()
+        if q == "Cepat": vcodec = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+        elif q == "Kualitas Tinggi": vcodec = ["-c:v", "libx264", "-preset", "slow", "-crf", "18"]
+        else: vcodec = ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
+        cmd = [self.ffmpeg, "-hide_banner", "-nostdin", "-y", "-stream_loop", str(max(0, loops - 1)), "-i", video, "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-vf", vf, *vcodec, "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", outfile]
+        tail = []
         try:
-            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                 encoding="utf-8", errors="replace")
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             while True:
                 line = p.stdout.readline()
                 if line:
-                    if "time=" in line:
-                        self.after(0, lambda s=line[-90:].strip(): self.status.config(text="Rendering... " + s))
-                elif p.poll() is not None:
-                    break
-                if self.stop_flag:
-                    p.terminate()
-                    try: p.wait(timeout=2)
-                    except subprocess.TimeoutExpired: p.kill()
+                    line = line.rstrip(); tail.append(line)
+                    if len(tail) > 30: tail.pop(0)
+                    if "time=" in line: self.after(0, lambda s=line[-100:]: self.progress_text.config(text="Rendering... " + s))
+                elif p.poll() is not None: break
+                if self.stop_flag.is_set():
+                    try: p.terminate(); p.wait(timeout=3)
+                    except Exception:
+                        try: p.kill()
+                        except Exception: pass
                     return False
-            return p.returncode == 0
+            if p.returncode != 0:
+                self.log("ERROR", f"FFmpeg exit code: {p.returncode}")
+                useful = [x for x in tail if any(k in x.lower() for k in ("error", "invalid", "failed", "unknown"))]
+                for line in (useful[-8:] if useful else tail[-8:]): self.log("FFMPEG", line)
+                return False
+            return True
         except Exception as e:
-            self.log(f"[ERROR] {e}")
-            return False
+            self.log("ERROR", f"Gagal menjalankan FFmpeg: {e}"); return False
+
 
 if __name__ == "__main__":
-    App().mainloop()
+    app = MasterRender()
+    app.mainloop()
