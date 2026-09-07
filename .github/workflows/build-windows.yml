@@ -3,6 +3,8 @@ name: Build MasterRender PRO ADIAN EXE
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -39,27 +41,27 @@ jobs:
         shell: powershell
         run: |
           python -m PyInstaller --noconfirm --clean --onefile --windowed `
-            --name "MasterRender_PRO_ADIAN" `
+            --name "MasterRender_PRO_AfroxSTD_ADIAN" `
             --add-binary "ffmpeg.exe;." `
-           masterrender_adian.py
+            masterrender_adian.py
 
       - name: Verify EXE
         shell: powershell
         run: |
-          if (-not (Test-Path "dist\MasterRender_PRO_ADIAN.exe")) {
+          if (-not (Test-Path "dist\MasterRender_PRO_AfroxSTD_ADIAN.exe")) {
             throw "EXE tidak berhasil dibuat."
           }
-          $size = (Get-Item "dist\MasterRender_PRO_ADIAN.exe").Length
+          $size = (Get-Item "dist\MasterRender_PRO_AfroxSTD_ADIAN.exe").Length
           Write-Host "EXE size: $size bytes"
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MasterRender_PRO_ADIAN-Windows
-          path: dist/MasterRender_PRO_ADIAN.exe
+          name: MasterRender_PRO_AfroxSTD_ADIAN-Windows
+          path: dist/MasterRender_PRO_AfroxSTD_ADIAN.exe
 
       - name: Create GitHub Release when tagged
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/MasterRender_PRO_ADIAN.exe
+          files: dist/MasterRender_PRO_AfroxSTD_ADIAN.exe
